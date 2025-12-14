@@ -12,15 +12,14 @@
       {{ errorMsg }}
     </div>
   </ScanLines>
-  <img
+
+  <canvas
     v-else
-    ref="imgRef"
+    ref="videoCanvas"
     class="w-full block h-[99%] shadow-[0_0_4px_2px] shadow-primary-500 select-none cursor-grab touch-none"
-    :draggable="false"
-    @load="handleImageOnLoad"
     :class="imgClass"
-    alt="Video"
-  />
+  ></canvas>
+
   <canvas
     v-if="isOverlayEnabled"
     ref="overlayCanvas"
@@ -46,6 +45,17 @@ const themeStore = useThemeStore();
 const overlayCanvas = ref<HTMLCanvasElement | null>(null);
 
 const imgRef = ref<HTMLImageElement>();
+
+const videoCanvas = ref<HTMLCanvasElement | null>(null);
+
+const {
+  initWS: initVideoStreamWS,
+  cleanup: cleanupVideoStreamWS,
+  imgLoading,
+  active: isVideoStreamActive,
+  imgInitted,
+} = useWebsocketStream({ url: "api/ws/video-stream", canvasRef: videoCanvas });
+
 
 const errorMsg = computed(() => camStore.error);
 
@@ -78,21 +88,21 @@ const {
 watch(
   () => detectionStore.detection_result,
   (newResults) => {
-    if (overlayCanvas.value && imgRef.value) {
+    if (overlayCanvas.value && videoCanvas.value) {
       const frameTimeStamp = detectionStore.currentFrameTimestamp;
       const detectionTimeStamp = detectionStore.timestamp;
 
       const enabled = detectionTimeStamp && frameTimeStamp;
 
       if (!enabled) {
-        return drawOverlay(overlayCanvas.value, imgRef.value, []);
+        return drawOverlay(overlayCanvas.value, videoCanvas.value, []);
       }
       const timeDiff = frameTimeStamp - detectionTimeStamp;
       const handler = overlayStyleHandlers[detectionStore.data.overlay_style];
       if (timeDiff <= detectionStore.data.overlay_draw_threshold) {
         handler(
           overlayCanvas.value,
-          imgRef.value,
+          videoCanvas.value,
           newResults,
           font.value,
           themeStore.bboxesColor || colorText.value,

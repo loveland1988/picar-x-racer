@@ -91,6 +91,11 @@ class StreamService:
         """
         Streams video frames to the connected WebSocket client.
         """
+        #next 3 lines added 12/14/25
+        target_fps = 15.0
+        min_dt = 1.0 / target_fps
+        last_send = 0.0
+
         skip_count = 0
         last_frame = None
         while (
@@ -119,6 +124,14 @@ class StreamService:
                         if websocket.application_state == WebSocketState.CONNECTED:
                             if self._check_app_cancelled(websocket):
                                 break
+
+                            #---FPS CAP (added) ----
+                            now = time.monotonic()
+                            dt = now - last_send
+                            if dt < min_dt:
+                                await asyncio.sleep(min_dt - dt)
+                            last_send = time.monotonic()
+                            #-----------------------
                             await websocket.send_bytes(encoded_frame)
                         else:
                             _log.info(

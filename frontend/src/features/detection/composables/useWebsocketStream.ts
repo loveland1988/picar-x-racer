@@ -4,7 +4,7 @@ import { useDetectionStore } from "@/features/detection";
 import { useStore as useFPSStore } from "@/features/settings/stores/fps";
 
 export interface WebsocketStreamParams extends WebSocketOptions {
-  imgRef: Ref<HTMLImageElement | undefined>;
+  canvasRef: Ref<HTMLImageElement | null>;
 }
 
 const extractFrameWithMetadata = (data: ArrayBuffer) => {
@@ -16,8 +16,8 @@ const extractFrameWithMetadata = (data: ArrayBuffer) => {
   const fps = dataView.getFloat64(8, true);
 
   // The rest of the data is the frame (starting from the 16th byte)
-  const arrayBufferView = new Uint8Array(data, 16);
-  const blob = new Blob([arrayBufferView], { type: "image/jpeg" });
+  const blob = new Blob([data.slice(16)], { type: "image/jpeg" });
+
 
   return { timestamp, serverFps: fps, blob };
 };
@@ -31,6 +31,9 @@ export const useWebsocketStream = (params: WebsocketStreamParams) => {
 
   let lastPerf: number = 0;
   let lastFPS: number = 0;
+
+  let pending: ArrayBuffer | null = null;
+  let pumping = false;
 
   const updateClientFPS = () => {
     const perf = performance.now();
@@ -53,35 +56,62 @@ export const useWebsocketStream = (params: WebsocketStreamParams) => {
       imgInitted.value = true;
     }
   };
+  
+  const pump = async () => {
+    if (pumping) return;
+    pumping = true;
+    try {
+      while (pending) {
+        const buf = pending;
+        pending = null;
 
-  const handleOnMessage = (data: MessageEvent["data"]) => {
-    updateClientFPS();
-    if (params.onMessage) {
-      params.onMessage(data);
-    }
+        updateClientFPS();
 
-    const urlCreator = window.URL || window.webkitURL;
-    if (currentImageBlobUrl.value) {
-      urlCreator.revokeObjectURL(currentImageBlobUrl.value);
-      currentImageBlobUrl.value = undefined;
-    }
+        // preserve existing "pass-through" behavior
+        if (params.onMessage) {
+          params.onMessage(buf);
+        }
 
-    const { timestamp, serverFps, blob } = extractFrameWithMetadata(data);
-    const imageUrl = urlCreator.createObjectURL(blob);
+        const urlCreator = window.URL || window.webkitURL;
 
-    detectionStore.setCurrentFrameTimestamp(timestamp);
-    fpsStore.updateServerFPS(serverFps);
+        // free previous blob URL
+        if (currentImageBlobUrl.value) {
+          urlCreator.revokeObjectURL(currentImageBlobUrl.value);
+          currentImageBlobUrl.value = undefined;
+        }
 
-    if (params.imgRef.value) {
-      params.imgRef.value.onload = handleImageOnLoad;
-      params.imgRef.value.src = imageUrl;
-      currentImageBlobUrl.value = imageUrl;
-      if (imgInitted.value && imgLoading.value) {
-        imgLoading.value = false;
+        const { timestamp, serverFps, blob } = extractFrameWithMetadata(buf);
+        const imageUrl = urlCreator.createObjectURL(blob);
+
+        detectionStore.setCurrentFrameTimestamp(timestamp);
+        fpsStore.updateServerFPS(serverFps);
+
+        if (params.canvasRef.value) {
+          params.canvasRef.value.onload = handleImageOnLoad;
+          params.canvasRef.value.src = imageUrl;
+          currentImageBlobUrl.value = imageUrl;
+
+          if (imgInitted.value && imgLoading.value) {
+            imgLoading.value = false;
+          }
+        } else {
+          // no img element mounted yet; don't leak
+          urlCreator.revokeObjectURL(imageUrl);
+        }
       }
+    } finally {
+      pumping = false;
     }
   };
 
+  const handleOnMessage = (data: MessageEvent["data"]) => {
+    // WebSocket binaryType is "arraybuffer", but keep a safe cast.
+    pending = data as ArrayBuffer;
+    void pump();
+  };
+
+
+  
   const handleOnClose = () => {
     if (params.onClose) {
       params.onClose();
